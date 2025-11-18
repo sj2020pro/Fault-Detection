@@ -1,6 +1,6 @@
 # NSUAD Anomaly Detection Demo
 
-This repository contains a reproducible implementation and demonstration of **NSUAD**, a deep-learning–based anomaly detection model.  
+This repository contains a reproducible implementation and demonstration of **NSUAD**, a deep-learning–based model for network anomaly detection.  
 The project includes a complete environment setup (Python 3.6 + TensorFlow 1.10), a deterministic training pipeline,  
 and a runnable **demo notebook** that walks through dataset preparation, model training, and evaluation metrics.
 
