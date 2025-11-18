@@ -6,7 +6,7 @@ and a runnable **demo notebook** that walks through dataset preparation, model t
 
 ---
 
-## 🚀 Overview
+##  Overview
 
 NSUAD is a weakly-supervised deviation-network–based anomaly detector.  
 It trains a neural model to produce **deviation scores**, which separate normal samples (inliers) from anomalous samples (outliers).
@@ -25,7 +25,7 @@ The full workflow is implemented in **`demo.ipynb`**.
 
 ---
 
-## 📦 Structure
+##  Structure
 
 /
 ├── demo.ipynb          # Main entrypoint demo notebook
