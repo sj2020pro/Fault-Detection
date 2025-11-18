@@ -1,6 +1,6 @@
 # Project Info
 
-**Title:** DEVNet Anomaly Detection Demo  
+**Title:** NSUAD Anomaly Detection Demo  
 **Maintainer:** Soheil Johari
 **Last Updated:** 2025-11 
 **Status:** Experimental 
@@ -9,7 +9,7 @@
 
 ## Description
 
-This project implements a fully reproducible demo of the **DEVNet** anomaly detection framework. 
+This project implements a fully reproducible demo of the **NSUAD** anomaly detection framework. 
 It includes deterministic training, data preprocessing, visualization, and metric evaluation. 
 A single `demo.ipynb` notebook demonstrates the workflow from data loading to final results.
 
