@@ -9,7 +9,7 @@ This repository implements the **Structural Causal Root Cause Analysis (SCRCA)**
 
 Use a dedicated **virtual environment** so dependency versions stay isolated from the system interpreter. **Python 3.8** matches the layout assumed below (e.g. `~/env/lib/python3.8/site-packages`); a newer 3.x release is fine if you adjust paths accordingly.
 
-Create the venv, activate it, upgrade **pip**, then install the scientific stack and the two main libraries this project calls from PyPI—**causal-learn**, **pyAgrum**, plus **numpy**, **pandas**, **networkx**, **scikit-learn**, **scipy**, **matplotlib**, and anything else your workflow needs. Pin versions to match your experiments if required.
+Install the two main libraries this project calls from PyPI: **causal-learn**, **pyAgrum**, plus **numpy**, **pandas**, **networkx**, **scikit-learn**, **scipy**, **matplotlib**, and anything else your workflow needs. Pin versions to match your experiments if required.
 
 ```bash
 python3.8 -m venv env
@@ -17,8 +17,6 @@ source env/bin/activate    # Windows: env\Scripts\activate
 python3 -m pip install --upgrade pip
 # pip install causal-learn pyAgrum numpy pandas networkx scikit-learn scipy matplotlib ...
 ```
-
-If you use **pyAgrum** notebook helpers (`pyAgrum.lib.notebook`), install **IPython** in the same environment.
 
 ### pyAgrum and causal-learn
 
