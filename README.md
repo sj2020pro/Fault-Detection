@@ -82,8 +82,8 @@ flowchart LR
 | **`SCRCA.py`** | Main entry for one case: loads data, optional column hiding, runs **`rca_with_rcd`** (multi-phase fault-time PC causal discovery: chunked localized PC plus a final scored pass), computes **SCRCA** observed/latent scores and ranking. |
 | **`utils.py`** | **`top_k_rc`**: multi-α PC loop; **`run_pc`**: localized or global skeleton discovery; F-node preprocessing; optional **`initial_skeleton_adj`**; CI test counting; **Pa(F)** / **p_min** extraction when `return_scores=True`. |
 | **`pag_to_initial_skeleton.py`** | Converts an offline **PAG** into **`initial_pc_skeleton_adj`** (undirected **G₀** for PC initialization) and can derive a **`latent_confounder_map`** JSON from **bidirected** edges among observed nodes (see section below). |
-| **`causallearn/...`** | Vendored/patched **causal-learn** pieces (**FCI**, **SkeletonDiscovery**, **GraphClass**, **Fas**) — keep in sync with venv symlinks. |
-| **`pyAgrum/`** | Patched **pyAgrum** helper(s). 
+| **`causallearn/...`** | Patched **causal-learn** pieces (**FCI**, **SkeletonDiscovery**, **GraphClass**, **Fas**). Keep in sync with venv symlinks. |
+| **`pyAgrum/`** | Patched **pyAgrum** helpers. 
 
 ---
 
