@@ -85,8 +85,7 @@ flowchart LR
 | **`utils.py`** | **`top_k_rc`**: multi-α PC loop; **`run_pc`**: localized or global skeleton discovery; F-node preprocessing; optional **`initial_skeleton_adj`**; CI test counting; **Pa(F)** / **p_min** extraction when `return_scores=True`. |
 | **`pag_to_initial_skeleton.py`** | Converts an offline **PAG** into **`initial_pc_skeleton_adj`** (undirected **G₀** for PC initialization) and can derive a **`latent_confounder_map`** JSON from **bidirected** edges among observed nodes (see section below). |
 | **`causallearn/...`** | Vendored/patched **causal-learn** pieces (**FCI**, **SkeletonDiscovery**, **GraphClass**, **Fas**) — keep in sync with venv symlinks. |
-| **`pyAgrum/`** | Patched **pyAgrum** helper(s). |
-| **`data/`** | Datasets; each case folder typically has **`normal.csv`** and **`anomalous.csv`**. |
+| **`pyAgrum/`** | Patched **pyAgrum** helper(s). 
 
 ---
 
@@ -172,9 +171,4 @@ flowchart LR
 
 ---
 
-## References (paper abstract)
 
-- **PAGs / FCI / constraint-based discovery:** Spirtes, Glymour, Scheines; Colombo et al. (order-independent FCI); Zhang; Mooij on constraint-based methods under latent variables.
-- **PC / causal discovery:** Spirtes et al.
-
-Use the **offline PAG** from **FCI** on **normal** data, run **`pag_to_initial_skeleton.py`** to obtain **`initial_pc_skeleton_adj`** (and optionally **`latent_confounder_map.json`** from bidirected edges), pass the skeleton into **`run_rca_case`** so fault-time PC starts from an **informed** **G₀**, and pass the latent map (dict or loaded JSON) so **SCRCA** scores **latent** candidates aligned with **PAG** structure.
