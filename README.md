@@ -1,154 +1,187 @@
-# Per-Slice RCA Framework for Throughput KPI Degradation
+# xNet Oceanus cluster access
 
-This directory contains a Chaos Mesh based root-cause-analysis experiment framework for the two Open5GS slices deployed in this testbed:
-
-- Slice `1-000001`: `ueransim-ue1` -> `open5gs-upf1`
-- Slice `2-000002`: `ueransim-ue2` -> `open5gs-upf2`
-
-The main KPI is always delivered slice throughput. The runner measures it as delivered ICMP payload throughput over the UE tunnel (`uesimtun0`) and also records Monarch/Prometheus UPF interface counters for the same slice UPF. Faults are injected into the slice-specific UPF with Chaos Mesh.
-
-## Tooling
-
-Chaos Mesh was installed with Helm:
-
-```bash
-helm repo add chaos-mesh https://charts.chaos-mesh.org
-helm repo update chaos-mesh
-helm install chaos-mesh chaos-mesh/chaos-mesh   -n chaos-mesh --create-namespace   --set chaosDaemon.runtime=containerd   --set chaosDaemon.socketPath=/run/containerd/containerd.sock
-```
-
-References used:
-
-- Chaos Mesh StressChaos supports container CPU stress with `workers` and `load`: https://chaos-mesh.org/docs/2.6.7/simulate-heavy-stress-on-kubernetes/
-- Chaos Mesh NetworkChaos supports `delay`, `loss`, `bandwidth`, and the `device` field: https://chaos-mesh.dev/reference/master/
+This folder is set up for using this laptop as the client machine for the
+shared xNet Kubernetes cluster. You do not need a separate Proxmox VM for this
+workflow.
 
 ## Files
 
-- `run_rca_experiments.py`: runs baseline, injects a fault, collects metrics, removes the fault, checks recovery, and saves CSV/plot/summary files.
-- `chaos/upf-cpu-stress.yaml`: `StressChaos` for UPF CPU contention.
-- `chaos/upf-packet-loss.yaml`: `NetworkChaos` packet loss on UPF `ogstun`.
-- `chaos/upf-bandwidth-cap.yaml`: `NetworkChaos` bandwidth cap on UPF `ogstun`.
-- `chaos/upf-network-delay.yaml`: `NetworkChaos` delay/jitter on UPF `ogstun`.
-- `plots/`: KPI plots for each accepted scenario.
-- `results/`: CSV time series and JSON summaries.
+- `ssjohari-xnet-mercury.yaml`: kubeconfig for the `ssjohari` namespace on
+  `xnet-mercury`. Keep this private because it contains an access token.
+- `oceanus-tunnel.sh`: opens the SSH tunnel that makes the cluster API
+  available on this laptop at `https://127.0.0.1:6443`.
+- `kubectl-xnet.sh`: runs `kubectl` with the repo kubeconfig.
 
-## How to Run
+## SSH config
 
-Run all scenarios for one slice:
+Add this to `~/.ssh/config`:
+
+```sshconfig
+Host oceanus
+    HostName oceanus.cs.uwaterloo.ca
+    User ssjohari
+    LocalForward 8006 atlas601:8006
+```
+
+The `8006` forward is for the Proxmox UI at `http://127.0.0.1:8006`. It is not
+needed for Kubernetes experiments, but it matches the Oceanus getting-started
+guide.
+
+The helper script can also connect without this alias because it defaults to
+`ssjohari@oceanus.cs.uwaterloo.ca`.
+
+## Connect to the Kubernetes cluster
+
+In one terminal, start the tunnel:
 
 ```bash
-cd /home/oem/data-pipeline/rca_framework
-/usr/bin/python3 ./run_rca_experiments.py --slice 1-000001 --all
-/usr/bin/python3 ./run_rca_experiments.py --slice 2-000002 --all
+./oceanus-tunnel.sh
 ```
 
-Run one scenario:
+Then, in another terminal, verify cluster access:
 
 ```bash
-/usr/bin/python3 ./run_rca_experiments.py --slice 1-000001 --scenario upf_cpu_stress
+./kubectl-xnet.sh config current-context
+./kubectl-xnet.sh get pods
 ```
 
-The runner rejects a scenario if the fault-window KPI drop is below 20%.
+All commands use the `ssjohari` namespace by default because that namespace is
+set in the kubeconfig.
 
-## Fault Scenarios and Root-Cause Metrics
+## If the tunnel target is different
 
-| Scenario | Chaos Mesh kind/action | Target | Expected KPI effect | RCA root-cause metric |
-|---|---|---|---|---|
-| `upf_cpu_stress` | `StressChaos`, CPU workers=12, load=95 | slice UPF container `upf` | Throughput drops because UPF packet processing is CPU-contended while sessions stay alive. | `upf_cpu_utilization_cores` |
-| `upf_packet_loss` | `NetworkChaos`, `loss=50`, `correlation=25` | slice UPF `ogstun` | Throughput drops from packet loss, but some packets still pass. | `upf_ogstun_packet_loss_pct` |
-| `upf_bandwidth_cap` | `NetworkChaos`, `bandwidth rate=40kbps` | slice UPF `ogstun` | Throughput is capped and queues add latency, but the slice does not go fully down. | `upf_ogstun_bandwidth_cap_bps` |
-| `upf_network_delay` | `NetworkChaos`, `latency=180ms`, `jitter=30ms` | slice UPF `ogstun` | Delivered throughput drops because per-sample completion time increases; packets still pass. | `upf_ogstun_added_latency_ms` |
+The kubeconfig points at `127.0.0.1:6443`, so the SSH tunnel forwards local port
+`6443` to the Kubernetes API server from inside the Oceanus network. This script
+defaults to `192.168.126.50:6443`, matching the xNet cluster guide.
 
-For loss, bandwidth, and delay, the root-cause metric is the low-level UPF `ogstun` impairment configured and observed through the active Chaos Mesh object. cAdvisor in this cluster does not expose Linux qdisc drop/latency counters directly, so the runner also records delivered loss percentage and RTT from the UE probe as confirmation signals.
-
-## Metrics Monitored
-
-The framework is per-slice: it maps the slice to the selected UPF pod, then evaluates these metrics for that UPF and its related slice state. Prometheus is served by Monarch at `http://10.0.0.5:30095`.
-
-| Metric name | PromQL or source | Description |
-|---|---|---|
-| `slice_delivered_throughput_bps` | runner UE probe | Main KPI: delivered payload bits per second through `uesimtun0`. |
-| `slice_icmp_loss_pct` | runner UE probe | Probe packet loss during each KPI sample. |
-| `slice_icmp_avg_rtt_ms` | runner UE probe | Probe RTT; useful for delay and CPU contention. |
-| `upf_cpu_utilization_cores` | `sum(rate(container_cpu_usage_seconds_total{namespace="open5gs",pod=~"<upf-pod>",container!=""}[1m]))` | UPF CPU usage; root for CPU stress. |
-| `upf_memory_working_set_bytes` | `sum(container_memory_working_set_bytes{namespace="open5gs",pod=~"<upf-pod>",container!=""})` | UPF memory pressure. |
-| `upf_ogstun_rx_bps` | `sum(rate(container_network_receive_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m])) * 8` | Bytes entering the UPF UE tunnel interface. |
-| `upf_ogstun_tx_bps` | `sum(rate(container_network_transmit_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m])) * 8` | Bytes leaving the UPF UE tunnel interface. |
-| `upf_ogstun_rx_drop_rate` | `sum(rate(container_network_receive_packets_dropped_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m]))` | cAdvisor receive drops on `ogstun`. |
-| `upf_ogstun_tx_drop_rate` | `sum(rate(container_network_transmit_packets_dropped_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m]))` | cAdvisor transmit drops on `ogstun`. |
-| `upf_n3_rx_bps` | `sum(rate(container_network_receive_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="n3"}[1m])) * 8` | N3 ingress traffic at the UPF. |
-| `upf_n3_tx_bps` | `sum(rate(container_network_transmit_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="n3"}[1m])) * 8` | N3 egress traffic at the UPF. |
-| `upf_eth0_rx_bps` | same receive query with `interface="eth0"` | UPF Kubernetes pod-network ingress. |
-| `upf_eth0_tx_bps` | same transmit query with `interface="eth0"` | UPF Kubernetes pod-network egress. |
-| `upf_ogstun_packet_loss_pct` | Chaos Mesh object + UE probe confirmation | Configured packet-loss impairment on UPF `ogstun`; root for packet-loss fault. |
-| `upf_ogstun_bandwidth_cap_bps` | Chaos Mesh object | Configured kernel traffic-control cap on UPF `ogstun`; root for bandwidth-cap fault. |
-| `upf_ogstun_added_latency_ms` | Chaos Mesh object + UE RTT confirmation | Configured netem delay on UPF `ogstun`; root for delay fault. |
-| `fivegs_upffunction_upf_sessionnbr` | `fivegs_upffunction_upf_sessionnbr` | UPF session count; confirms the slice is degraded, not down. |
-| `fivegs_smffunction_sm_sessionnbr` | `fivegs_smffunction_sm_sessionnbr` | SMF session count. |
-| `ues_active` | `ues_active` | Active UE count reported by SMF metrics. |
-| `ran_ue` | `ran_ue` | RAN UE count reported by AMF metrics. |
-| `fivegs_amffunction_rm_registeredsubnbr` | `fivegs_amffunction_rm_registeredsubnbr` | Registered subscriber count. |
-| `fivegs_smffunction_sm_qos_flow_nbr` | `fivegs_smffunction_sm_qos_flow_nbr` | SMF QoS flow count. |
-
-## RCA Logic
-
-For each slice and scenario:
-
-1. Establish a baseline KPI window.
-2. Inject exactly one fault against the slice UPF.
-3. Continue sampling the main KPI and the monitored metrics during the fault.
-4. Remove the fault and sample recovery.
-5. Accept the scenario only if average KPI drops by at least 20% during the fault window and recovers afterward.
-6. Pinpoint the root cause as the low-level metric that both changes in the fault window and matches the injected fault family.
-
-This gives supervised RCA data: every row in `results/*.csv` has the KPI and low-level metrics, and every `*_summary.json` records the known root metric.
-
-## Verified Results
-
-| Slice | Scenario | Baseline avg bps | Fault avg bps | Recovery avg bps | Drop |
-|---|---:|---:|---:|---:|---:|
-| `1-000001` | `upf_cpu_stress` | 859433.8 | 461739.2 | 854251.3 | 46.3% |
-| `1-000001` | `upf_packet_loss` | 860167.7 | 330700.0 | 834011.8 | 61.6% |
-| `1-000001` | `upf_bandwidth_cap` | 717426.7 | 330807.6 | 764965.1 | 53.9% |
-| `1-000001` | `upf_network_delay` | 851017.9 | 458517.5 | 832730.4 | 46.1% |
-| `2-000002` | `upf_cpu_stress` | 845769.1 | 472344.6 | 761704.6 | 44.2% |
-| `2-000002` | `upf_packet_loss` | 616022.4 | 285403.0 | 748791.2 | 53.7% |
-| `2-000002` | `upf_bandwidth_cap` | 695509.9 | 331949.0 | 717261.7 | 52.3% |
-| `2-000002` | `upf_network_delay` | 678961.0 | 459673.7 | 712452.5 | 32.3% |
-
-All scenarios preserve pod/session availability and avoid a full slice outage.
-
-## Plot Locations
-
-Plots are saved in:
-
-```text
-/home/oem/data-pipeline/rca_framework/plots/
-```
-
-Generated plot files:
-
-```text
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_cpu_stress.png
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_packet_loss.png
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_bandwidth_cap.png
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_network_delay.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_cpu_stress.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_packet_loss.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_bandwidth_cap.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_network_delay.png
-```
-
-## Safety / Cleanup
-
-Check that no fault remains active:
+If the cluster admin gave you a different API host, run:
 
 ```bash
-kubectl get stresschaos,networkchaos -n open5gs
+XNET_API_TARGET=actual-hostname:6443 ./oceanus-tunnel.sh
 ```
 
-Delete any RCA fault manually if needed:
+or edit `XNET_API_TARGET` in the script.
+
+## Running experiments
+
+Use the wrapper for normal Kubernetes operations:
 
 ```bash
-kubectl delete stresschaos,networkchaos -n open5gs --all
+./kubectl-xnet.sh apply -f experiment.yaml
+./kubectl-xnet.sh get pods
+./kubectl-xnet.sh logs job/my-job
+./kubectl-xnet.sh delete -f experiment.yaml
 ```
+
+Avoid deploying cluster-wide resources unless the admin has explicitly granted
+that permission. Namespace-scoped resources such as Pods, Jobs, Deployments,
+Services, ConfigMaps, and Secrets are the expected path.
+
+## Installing Helm charts
+
+Use the existing namespace permissions and service account when installing
+charts:
+
+```bash
+helm install <release> <chart> \
+  --namespace ssjohari \
+  --kubeconfig ./ssjohari-xnet-mercury.yaml \
+  --set rbac.create=false \
+  --set serviceAccount.create=false
+```
+
+Those two `--set` values are important for namespace-scoped cluster access:
+the chart should not try to create its own RBAC resources or service account.
+
+## RCA offline dataset
+
+The RCA client scripts are in this folder:
+
+- `xnet-rca-export.sh`: creates an offline labeled dataset from past RCA sweep
+  windows.
+- `xnet-rca-live.py`: polls the live snapshot API.
+
+Create a 1-hour offline dataset:
+
+```bash
+./oceanus-tunnel.sh
+```
+
+Then in another terminal:
+
+```bash
+KUBECONFIG=/home/oem/Documents/Xnet/ssjohari-xnet-mercury.yaml \
+  ./xnet-rca-export.sh -n ssjohari -w 1h -o ./rca-offline-out
+```
+
+This produces one directory per labeled scenario plus `manifest.jsonl`. The
+first export here produced 20 scenario windows under `./rca-offline-out`.
+
+To include pod logs:
+
+```bash
+KUBECONFIG=/home/oem/Documents/Xnet/ssjohari-xnet-mercury.yaml \
+  ./xnet-rca-export.sh -n ssjohari -w 1h -o ./rca-offline-out-with-logs -- \
+  --include-logs --log-limit 5000
+```
+
+## Manual RCA faults
+
+`manual_rca.py` adds a manual mode on top of the existing xNet RCA image:
+
+- pause the automated random sweep,
+- run the same baseline eMBB + URLLC UE workload continuously with no faults,
+- trigger one chosen fault scenario on demand using the same Chaos Mesh recipes,
+- resume baseline afterwards.
+
+Start manual mode:
+
+```bash
+./manual_rca.py pause-sweep
+./manual_rca.py start-baseline
+./manual_rca.py status
+```
+
+Trigger one fault scenario:
+
+```bash
+./manual_rca.py trigger cpu_stress --target-class smf --duration 60
+./manual_rca.py trigger gnb_to_core_loss --duration 60
+./manual_rca.py trigger gnb_to_core_delay --duration 60
+./manual_rca.py trigger gnb_to_core_partition --duration 60
+./manual_rca.py trigger upf_bandwidth_cap --duration 60
+```
+
+During a trigger, the script pauses the manual baseline deployment, runs one
+scenario with the same default workload and the requested fault, then resumes
+the baseline deployment. The one-shot fault pod is labeled so the existing
+`xnet-rca-sweep` `VMPodScrape` can scrape `xnet_fault_active` while the fault
+is active.
+
+Return to the automated sweep:
+
+```bash
+./manual_rca.py stop-baseline
+./manual_rca.py resume-sweep
+```
+
+## RCA FastAPI app
+
+The interactive manual RCA app lives in `RCA_APP/`.
+
+```bash
+cd /home/oem/Documents/Xnet
+./oceanus-tunnel.sh
+```
+
+Then:
+
+```bash
+cd /home/oem/Documents/Xnet/RCA_APP
+./run.sh
+```
+
+Open `http://127.0.0.1:8088`. The app plots live throughput KPI, can start
+manual baseline mode, inject a selected 60-second fault, mark injection and
+detection times, and plot a root-cause metric from 30 seconds before injection
+through the collected post-injection window.
