@@ -1,154 +1,236 @@
-# Per-Slice RCA Framework for Throughput KPI Degradation
+# N4/PFCP RX Packet-Rate Storm Fault
 
-This directory contains a Chaos Mesh based root-cause-analysis experiment framework for the two Open5GS slices deployed in this testbed:
+This folder documents a control-plane traffic fault that can be injected after the 5G core is already running and UE traffic is healthy. The fault creates constant N4/PFCP traffic toward `upf1`, causing the UPF to receive a very high packet rate on its N4 interface. In the local test, this increased slice RTT without crashing the UPF.
 
-- Slice `1-000001`: `ueransim-ue1` -> `open5gs-upf1`
-- Slice `2-000002`: `ueransim-ue2` -> `open5gs-upf2`
+## Fault Summary
 
-The main KPI is always delivered slice throughput. The runner measures it as delivered ICMP payload throughput over the UE tunnel (`uesimtun0`) and also records Monarch/Prometheus UPF interface counters for the same slice UPF. Faults are injected into the slice-specific UPF with Chaos Mesh.
+The fault is an N4/PFCP control-plane packet storm from the SMF-side network to `upf1`.
 
-## Tooling
+- Target function: `open5gs-upf1`
+- Target interface: `n4`
+- Target protocol: PFCP over UDP
+- Target port: `8805`
+- Fault scope: slice-level when the affected slice is anchored on `upf1`
+- Main KPI affected: throughput and/or RTT for the slice using `upf1`
+- Root-cause metric: `upf1` N4 RX packet rate
 
-Chaos Mesh was installed with Helm:
+This fault does not require restarting the UE, restarting the PDU session, or redeploying the UPF. It can be injected while traffic is already flowing.
 
-```bash
-helm repo add chaos-mesh https://charts.chaos-mesh.org
-helm repo update chaos-mesh
-helm install chaos-mesh chaos-mesh/chaos-mesh   -n chaos-mesh --create-namespace   --set chaosDaemon.runtime=containerd   --set chaosDaemon.socketPath=/run/containerd/containerd.sock
-```
+## Why This Can Degrade Slice Performance
 
-References used:
+PFCP is the control-plane protocol used between the SMF and UPF on the N4 interface. A high-rate PFCP storm forces `upf1` to continuously receive and process control-plane packets. Even if the packets are invalid or ignored, the UPF still spends CPU time, socket receive-buffer capacity, interrupt/softirq processing, and logging/parser work on the N4 traffic.
 
-- Chaos Mesh StressChaos supports container CPU stress with `workers` and `load`: https://chaos-mesh.org/docs/2.6.7/simulate-heavy-stress-on-kubernetes/
-- Chaos Mesh NetworkChaos supports `delay`, `loss`, `bandwidth`, and the `device` field: https://chaos-mesh.dev/reference/master/
+Because the same UPF process and host resources are also responsible for user-plane forwarding, excessive N4 RX traffic can interfere with user-plane packet handling. The expected user-visible symptom is increased RTT and, under heavier load, reduced throughput for the slice anchored on that UPF.
 
-## Files
+## Root-Cause Metric
 
-- `run_rca_experiments.py`: runs baseline, injects a fault, collects metrics, removes the fault, checks recovery, and saves CSV/plot/summary files.
-- `chaos/upf-cpu-stress.yaml`: `StressChaos` for UPF CPU contention.
-- `chaos/upf-packet-loss.yaml`: `NetworkChaos` packet loss on UPF `ogstun`.
-- `chaos/upf-bandwidth-cap.yaml`: `NetworkChaos` bandwidth cap on UPF `ogstun`.
-- `chaos/upf-network-delay.yaml`: `NetworkChaos` delay/jitter on UPF `ogstun`.
-- `plots/`: KPI plots for each accepted scenario.
-- `results/`: CSV time series and JSON summaries.
+Only one root-cause metric is used for this fault:
 
-## How to Run
+| Metric | Description | Why It Is The Root Cause |
+| --- | --- | --- |
+| `upf1_n4_rx_packet_rate_pps` | Packet receive rate on the `n4` interface of the `open5gs-upf1` pod, measured in packets per second. | The injected fault is directly an abnormal N4/PFCP packet storm. When this metric spikes, the UPF is receiving excessive control-plane packets. The KPI degradation is caused by that control-plane RX load competing with normal UPF forwarding work. |
 
-Run all scenarios for one slice:
+## How To Measure The Root-Cause Metric
 
-```bash
-cd /home/oem/data-pipeline/rca_framework
-/usr/bin/python3 ./run_rca_experiments.py --slice 1-000001 --all
-/usr/bin/python3 ./run_rca_experiments.py --slice 2-000002 --all
-```
+Inside the `open5gs-upf1` pod, the Linux interface counters expose cumulative RX packet counts for each interface.
 
-Run one scenario:
+Check the current N4 packet counter:
 
 ```bash
-/usr/bin/python3 ./run_rca_experiments.py --slice 1-000001 --scenario upf_cpu_stress
+kubectl exec -n open5gs open5gs-upf1-7d98bf9f8d-pgdwc -- sh -c "cat /sys/class/net/n4/statistics/rx_packets"
 ```
 
-The runner rejects a scenario if the fault-window KPI drop is below 20%.
+Measure RX packet rate over a 5-second window:
 
-## Fault Scenarios and Root-Cause Metrics
+```bash
+kubectl exec -n open5gs open5gs-upf1-7d98bf9f8d-pgdwc -- sh -c 'a=$(cat /sys/class/net/n4/statistics/rx_packets); sleep 5; b=$(cat /sys/class/net/n4/statistics/rx_packets); echo $(( (b-a)/5 ))'
+```
 
-| Scenario | Chaos Mesh kind/action | Target | Expected KPI effect | RCA root-cause metric |
-|---|---|---|---|---|
-| `upf_cpu_stress` | `StressChaos`, CPU workers=12, load=95 | slice UPF container `upf` | Throughput drops because UPF packet processing is CPU-contended while sessions stay alive. | `upf_cpu_utilization_cores` |
-| `upf_packet_loss` | `NetworkChaos`, `loss=50`, `correlation=25` | slice UPF `ogstun` | Throughput drops from packet loss, but some packets still pass. | `upf_ogstun_packet_loss_pct` |
-| `upf_bandwidth_cap` | `NetworkChaos`, `bandwidth rate=40kbps` | slice UPF `ogstun` | Throughput is capped and queues add latency, but the slice does not go fully down. | `upf_ogstun_bandwidth_cap_bps` |
-| `upf_network_delay` | `NetworkChaos`, `latency=180ms`, `jitter=30ms` | slice UPF `ogstun` | Delivered throughput drops because per-sample completion time increases; packets still pass. | `upf_ogstun_added_latency_ms` |
+The output is the approximate N4 RX packet rate in packets per second.
 
-For loss, bandwidth, and delay, the root-cause metric is the low-level UPF `ogstun` impairment configured and observed through the active Chaos Mesh object. cAdvisor in this cluster does not expose Linux qdisc drop/latency counters directly, so the runner also records delivered loss percentage and RTT from the UE probe as confirmation signals.
+You can also inspect the full interface counters:
 
-## Metrics Monitored
+```bash
+kubectl exec -n open5gs open5gs-upf1-7d98bf9f8d-pgdwc -- ip -s link show n4
+```
 
-The framework is per-slice: it maps the slice to the selected UPF pod, then evaluates these metrics for that UPF and its related slice state. Prometheus is served by Monarch at `http://10.0.0.5:30095`.
+During the tested fault run, `upf1` received about `3.76M` packets on `n4` in 30 seconds, which is roughly `125k packets/s`.
 
-| Metric name | PromQL or source | Description |
-|---|---|---|
-| `slice_delivered_throughput_bps` | runner UE probe | Main KPI: delivered payload bits per second through `uesimtun0`. |
-| `slice_icmp_loss_pct` | runner UE probe | Probe packet loss during each KPI sample. |
-| `slice_icmp_avg_rtt_ms` | runner UE probe | Probe RTT; useful for delay and CPU contention. |
-| `upf_cpu_utilization_cores` | `sum(rate(container_cpu_usage_seconds_total{namespace="open5gs",pod=~"<upf-pod>",container!=""}[1m]))` | UPF CPU usage; root for CPU stress. |
-| `upf_memory_working_set_bytes` | `sum(container_memory_working_set_bytes{namespace="open5gs",pod=~"<upf-pod>",container!=""})` | UPF memory pressure. |
-| `upf_ogstun_rx_bps` | `sum(rate(container_network_receive_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m])) * 8` | Bytes entering the UPF UE tunnel interface. |
-| `upf_ogstun_tx_bps` | `sum(rate(container_network_transmit_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m])) * 8` | Bytes leaving the UPF UE tunnel interface. |
-| `upf_ogstun_rx_drop_rate` | `sum(rate(container_network_receive_packets_dropped_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m]))` | cAdvisor receive drops on `ogstun`. |
-| `upf_ogstun_tx_drop_rate` | `sum(rate(container_network_transmit_packets_dropped_total{namespace="open5gs",pod=~"<upf-pod>",interface="ogstun"}[1m]))` | cAdvisor transmit drops on `ogstun`. |
-| `upf_n3_rx_bps` | `sum(rate(container_network_receive_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="n3"}[1m])) * 8` | N3 ingress traffic at the UPF. |
-| `upf_n3_tx_bps` | `sum(rate(container_network_transmit_bytes_total{namespace="open5gs",pod=~"<upf-pod>",interface="n3"}[1m])) * 8` | N3 egress traffic at the UPF. |
-| `upf_eth0_rx_bps` | same receive query with `interface="eth0"` | UPF Kubernetes pod-network ingress. |
-| `upf_eth0_tx_bps` | same transmit query with `interface="eth0"` | UPF Kubernetes pod-network egress. |
-| `upf_ogstun_packet_loss_pct` | Chaos Mesh object + UE probe confirmation | Configured packet-loss impairment on UPF `ogstun`; root for packet-loss fault. |
-| `upf_ogstun_bandwidth_cap_bps` | Chaos Mesh object | Configured kernel traffic-control cap on UPF `ogstun`; root for bandwidth-cap fault. |
-| `upf_ogstun_added_latency_ms` | Chaos Mesh object + UE RTT confirmation | Configured netem delay on UPF `ogstun`; root for delay fault. |
-| `fivegs_upffunction_upf_sessionnbr` | `fivegs_upffunction_upf_sessionnbr` | UPF session count; confirms the slice is degraded, not down. |
-| `fivegs_smffunction_sm_sessionnbr` | `fivegs_smffunction_sm_sessionnbr` | SMF session count. |
-| `ues_active` | `ues_active` | Active UE count reported by SMF metrics. |
-| `ran_ue` | `ran_ue` | RAN UE count reported by AMF metrics. |
-| `fivegs_amffunction_rm_registeredsubnbr` | `fivegs_amffunction_rm_registeredsubnbr` | Registered subscriber count. |
-| `fivegs_smffunction_sm_qos_flow_nbr` | `fivegs_smffunction_sm_qos_flow_nbr` | SMF QoS flow count. |
+## Prerequisites
 
-## RCA Logic
+Before injecting the fault, confirm that the 5G core and UEs are healthy.
 
-For each slice and scenario:
+Check pods:
 
-1. Establish a baseline KPI window.
-2. Inject exactly one fault against the slice UPF.
-3. Continue sampling the main KPI and the monitored metrics during the fault.
-4. Remove the fault and sample recovery.
-5. Accept the scenario only if average KPI drops by at least 20% during the fault window and recovers afterward.
-6. Pinpoint the root cause as the low-level metric that both changes in the fault window and matches the injected fault family.
+```bash
+kubectl get pods -n open5gs -o wide
+```
 
-This gives supervised RCA data: every row in `results/*.csv` has the KPI and low-level metrics, and every `*_summary.json` records the known root metric.
+Expected relevant pods:
 
-## Verified Results
+- `open5gs-smf1`
+- `open5gs-upf1`
+- `ueransim-ue1`
+- `ueransim-ue2`
 
-| Slice | Scenario | Baseline avg bps | Fault avg bps | Recovery avg bps | Drop |
-|---|---:|---:|---:|---:|---:|
-| `1-000001` | `upf_cpu_stress` | 859433.8 | 461739.2 | 854251.3 | 46.3% |
-| `1-000001` | `upf_packet_loss` | 860167.7 | 330700.0 | 834011.8 | 61.6% |
-| `1-000001` | `upf_bandwidth_cap` | 717426.7 | 330807.6 | 764965.1 | 53.9% |
-| `1-000001` | `upf_network_delay` | 851017.9 | 458517.5 | 832730.4 | 46.1% |
-| `2-000002` | `upf_cpu_stress` | 845769.1 | 472344.6 | 761704.6 | 44.2% |
-| `2-000002` | `upf_packet_loss` | 616022.4 | 285403.0 | 748791.2 | 53.7% |
-| `2-000002` | `upf_bandwidth_cap` | 695509.9 | 331949.0 | 717261.7 | 52.3% |
-| `2-000002` | `upf_network_delay` | 678961.0 | 459673.7 | 712452.5 | 32.3% |
+Confirm UE traffic works before injecting the fault:
 
-All scenarios preserve pod/session availability and avoid a full slice outage.
+```bash
+kubectl exec -n open5gs ueransim-ue1-5c4db98cfb-5kmks -- ping -I uesimtun0 -c 80 -i 0.05 -s 1200 8.8.8.8
+```
 
-## Plot Locations
+Optional comparison slice:
 
-Plots are saved in:
+```bash
+kubectl exec -n open5gs ueransim-ue2-674df7f946-44lst -- ping -I uesimtun0 -c 80 -i 0.05 -s 1200 8.8.8.8
+```
+
+## Fault Injection Command
+
+Run the following command from the host. It executes inside the `smf1` pod and sends PFCP-like UDP packets to `upf1` on N4 port `8805` for 30 seconds.
+
+```bash
+kubectl exec -n open5gs open5gs-smf1-7fb9848485-r5w46 -- /usr/bin/perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(PeerAddr=>"10.10.4.1",PeerPort=>8805,Proto=>"udp") or die $!; $p="\x21\x34\x00\x23\x00\x00\x00\x00\x00\x00\x09\x23\x01\x23\x46\x00\x00\x0a\x00\x13\x00\x6c\x00\x04\x00\x00\x00\x02\x00\x2c\x00\x02\x0c\x00\x00\x58\x00\x01\x01"; $end=time()+30; $n=0; while(time()<$end){ for(1..1000){$s->send($p); $n++} select undef,undef,undef,0.001 } print "sent=$n\n";'
+```
+
+The command prints the number of packets sent when it finishes.
+
+In the local test, the output was:
 
 ```text
-/home/oem/data-pipeline/rca_framework/plots/
+sent=3765000
 ```
 
-Generated plot files:
+## How To Validate The Effect
+
+Use three terminals.
+
+Terminal 1: monitor the root-cause metric before and during the fault.
+
+```bash
+kubectl exec -n open5gs open5gs-upf1-7d98bf9f8d-pgdwc -- sh -c 'while true; do ts=$(date +%s); a=$(cat /sys/class/net/n4/statistics/rx_packets); sleep 1; b=$(cat /sys/class/net/n4/statistics/rx_packets); echo "$ts $((b-a))"; done'
+```
+
+Terminal 2: run UE traffic for the slice anchored on `upf1`.
+
+```bash
+kubectl exec -n open5gs ueransim-ue1-5c4db98cfb-5kmks -- ping -I uesimtun0 -c 300 -i 0.05 -s 1200 8.8.8.8
+```
+
+Terminal 3: inject the fault.
+
+```bash
+kubectl exec -n open5gs open5gs-smf1-7fb9848485-r5w46 -- /usr/bin/perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(PeerAddr=>"10.10.4.1",PeerPort=>8805,Proto=>"udp") or die $!; $p="\x21\x34\x00\x23\x00\x00\x00\x00\x00\x00\x09\x23\x01\x23\x46\x00\x00\x0a\x00\x13\x00\x6c\x00\x04\x00\x00\x00\x02\x00\x2c\x00\x02\x0c\x00\x00\x58\x00\x01\x01"; $end=time()+30; $n=0; while(time()<$end){ for(1..1000){$s->send($p); $n++} select undef,undef,undef,0.001 } print "sent=$n\n";'
+```
+
+Expected validation pattern:
+
+- Before fault: `upf1_n4_rx_packet_rate_pps` is low.
+- During fault: `upf1_n4_rx_packet_rate_pps` spikes sharply.
+- During fault: UE1 RTT increases, or throughput decreases if using a throughput generator.
+- After fault: `upf1_n4_rx_packet_rate_pps` returns near baseline.
+- After fault: UE1 RTT/throughput recovers.
+
+## Observed Local Result
+
+The following result was observed in the local `open5gs` namespace:
+
+| Phase | UE1 Packet Loss | UE1 RTT Avg |
+| --- | ---: | ---: |
+| Before fault | `0%` | `16.166 ms` |
+| During N4/PFCP storm | `0%` | `31.562 ms` |
+| After fault | `0%` | `12.117 ms` |
+
+The affected KPI was RTT. This is still useful for the RCA framework because RTT increase is a direct performance degradation and can also reduce measured throughput for TCP-like traffic.
+
+## Real-World Fault Scenarios
+
+This injected behavior represents real classes of control-plane faults that can happen in deployed 5G cores.
+
+### 1. Buggy SMF PFCP Retry Loop
+
+An SMF bug or race condition repeatedly retries PFCP session modification, deletion, association, or heartbeat messages toward the same UPF. This can happen if the SMF incorrectly believes the UPF did not acknowledge a previous request, or if transaction-state cleanup fails.
+
+Expected symptom:
+
+- High `upf1_n4_rx_packet_rate_pps`
+- Increased UPF CPU and parser work
+- Higher RTT or lower throughput for slices anchored on that UPF
+
+### 2. SMF-UPF Version Or Configuration Mismatch
+
+If SMF and UPF versions, PFCP feature support, enterprise IEs, or configuration expectations do not match, the SMF may repeatedly send messages that the UPF rejects or cannot parse. The control plane remains active, but the N4 interface becomes noisy.
+
+Expected symptom:
+
+- Repeated PFCP messages on N4
+- Possible UPF PFCP parsing or rejection logs
+- Slice performance degradation without a full PDU session restart
+
+### 3. Misconfigured Slice Or UPF Selection Policy
+
+A slice policy error can cause too many control-plane operations to target one UPF. For example, the SMF may keep re-evaluating the UPF or repeatedly applying policy updates for a slice that is mapped to `upf1`.
+
+Expected symptom:
+
+- N4 RX packet-rate spike on only the UPF serving that slice
+- Other slices on other UPFs are less affected
+- The degraded slice shows RTT or throughput impact
+
+### 4. Control-Plane Automation Or Orchestrator Loop
+
+An external controller, automation job, or orchestration script may repeatedly trigger policy/session updates through the control plane. Even if every individual action is small, a tight loop can create a persistent N4 storm.
+
+Expected symptom:
+
+- Periodic or sustained `upf1_n4_rx_packet_rate_pps` spikes
+- KPI degradation aligned with controller activity
+- Recovery when the automation loop stops
+
+### 5. Internal Control-Plane Abuse Or Compromise
+
+If an internal pod or compromised control-plane component can reach the N4 network, it may intentionally or accidentally flood the UPF PFCP port. This does not require public exposure of the UPF.
+
+Expected symptom:
+
+- Very high N4 RX packet rate
+- UPF remains up but data-plane service quality degrades
+- Fault is localized to UPFs reachable from the noisy source
+
+## RCA Interpretation
+
+For this fault, the RCA framework should identify:
 
 ```text
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_cpu_stress.png
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_packet_loss.png
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_bandwidth_cap.png
-/home/oem/data-pipeline/rca_framework/plots/1-000001_upf_network_delay.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_cpu_stress.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_packet_loss.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_bandwidth_cap.png
-/home/oem/data-pipeline/rca_framework/plots/2-000002_upf_network_delay.png
+Root cause metric: upf1_n4_rx_packet_rate_pps
+Root cause function: upf1
+Root cause interface: n4
+Fault type: control-plane N4/PFCP packet-rate storm
+Affected KPI: slice throughput degradation and/or RTT increase
 ```
 
-## Safety / Cleanup
+The causal chain is:
 
-Check that no fault remains active:
-
-```bash
-kubectl get stresschaos,networkchaos -n open5gs
+```text
+Excessive PFCP/N4 traffic
+-> high upf1 N4 RX packet rate
+-> UPF control-plane receive/parser load
+-> less stable user-plane forwarding latency
+-> slice RTT increase or throughput degradation
 ```
 
-Delete any RCA fault manually if needed:
+## Cleanup
+
+The injection command is time bounded and exits automatically after 30 seconds. No Kubernetes object is created, and no cleanup command is normally required.
+
+After the fault ends, verify recovery:
 
 ```bash
-kubectl delete stresschaos,networkchaos -n open5gs --all
+kubectl exec -n open5gs ueransim-ue1-5c4db98cfb-5kmks -- ping -I uesimtun0 -c 40 -i 0.05 -s 1200 8.8.8.8
+```
+
+Also verify that UPF is still healthy:
+
+```bash
+kubectl get pods -n open5gs -o wide
 ```
