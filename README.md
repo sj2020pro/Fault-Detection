@@ -1,6 +1,6 @@
-# 5G Network RCA — `SCRCA`
+# 5G Network RCA — `new_rcd`
 
-Root Cause Analysis (RCA) for 5G network faults using the **SCRCA algorithm** with a learned initial graph.
+Root Cause Analysis (RCA) for 5G network faults using the **SCRCA algorithm**
 
 ---
 
@@ -9,7 +9,7 @@ Root Cause Analysis (RCA) for 5G network faults using the **SCRCA algorithm** wi
 The algorithm identifies the most likely root-cause metrics for a fault by:
 
 1. Splitting a metrics time-series window into a **normal baseline** (60 s before fault) and an **anomalous window** (60 s after fault start).
-2. Running a **PC skeleton-discovery** algorithm seeded with a pre-computed initial graph (`learned_initial_graph.json`) rather than starting from a complete graph. This biases the search toward known causal relationships in the 5G user plane, improving top-1 accuracy by ~18 percentage points over the complete-graph baseline on benchmark data.
+2. Running a **PC skeleton-discovery** algorithm seeded with a pre-computed initial graph (`learned_initial_graph.json`) rather than starting from a complete graph. This biases the search toward known causal relationships in the 5G user plane
 3. Ranking F-node neighbours by p-value and effect size to produce a top-k root cause list.
 
 ### Supported fault types
@@ -28,11 +28,11 @@ The algorithm works on any fault type whose scenarios include `root_cause_metric
 
 ## Setup
 
-Tested on **Ubuntu 20.04** with Python 3.8.
+Requires **Python 3.8** and the **cmu-phil fork** of `causal-learn==0.1.2.3`. On Python 3.8, `pip install causal-learn==0.1.2.3` installs the correct cmu-phil build. On Python 3.9+ the same version resolves to the py-why fork which has breaking API changes (`CausalGraph.remove_edge`, `p_values`, `mi`, `no_ci_tests` and `append_to_mi` are absent) and will not work.
 
 ```bash
-# 1. Create and activate a virtual environment
-python3 -m venv env
+# 1. Create and activate a Python 3.8 virtual environment
+python3.8 -m venv env
 source env/bin/activate
 
 # 2. Install dependencies
@@ -40,7 +40,8 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> **Note:** `causal-learn==0.1.2.3` is pinned. Other versions may have API differences.
+> **Note:** `causal-learn==0.1.2.3` is pinned and **must be installed under Python 3.8**
+> to get the cmu-phil fork with the required internal API.
 > `pyarrow` is required for reading `.parquet` metric files.
 
 ---
@@ -48,7 +49,7 @@ pip install -r requirements.txt
 ## Repository structure
 
 ```
-SCRCA/
+new_rcd/
 ├── rcd.py                     # Main RCA entry point (load_offline_scenario, top_k_rc)
 ├── utils.py                   # PC algorithm, graph building, data preprocessing
 ├── learned_initial_graph.json # Pre-saved initial graph (94 metric-metric edges)
@@ -125,7 +126,6 @@ usage: evaluate.py [-h] [--dataset DATASET] [--mode {learned_initial_graph,compl
   --mode      Initial graph mode:
                 learned_initial_graph  (default) — pre-saved 94-edge graph
                 complete               — full PC from complete graph
-                metric_family_n3link   — metric-family + N3 cross-links (dynamic)
   --k         Top-k root causes to return (default: 3)
   --bins      Discretisation bins for chi-squared CI test (default: 2)
   --before    Seconds of normal data before fault start (default: 60)
@@ -135,25 +135,8 @@ usage: evaluate.py [-h] [--dataset DATASET] [--mode {learned_initial_graph,compl
 
 ---
 
-## Expected results on `5g_dataset`
 
-| Scenario | N | LIG Top-1 | LIG Top-3 | Complete Top-1 | Complete Top-3 |
-|---|---|---|---|---|---|
-| cpu_stress / gnb2 | 25 | ~68% | ~92% | ~32% | ~72% |
-| cpu_stress / upf2 | 23 | ~65% | ~96% | ~39% | ~78% |
-| pfcp_storm / upf2 | 25 | ~56% | ~96% | ~36% | ~72% |
-| ue_context_churn / gnb2 | 18 | ~67% | ~89% | ~61% | ~83% |
-| gnb_to_core_partition / gnb2 | 14 | ~57% | ~86% | ~57% | ~86% |
-| upf_bandwidth_cap / upf2 | 15 | ~40% | ~73% | ~40% | ~67% |
-| **OVERALL** | **120** | **~60%** | **~90%** | **~43%** | **~76%** |
-
-> Results may vary slightly (~1–2%) between runs due to the stochastic ordering in the PC algorithm.
-
----
-
-
-
-## Monitored metrics (20 total, all related to one network slice (slice 2))
+## Monitored metrics (20 total all related to one network slice (slice 2))
 
 | Metric | Description |
 |---|---|
