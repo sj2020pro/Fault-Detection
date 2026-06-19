@@ -1,4 +1,4 @@
-# 5G Network RCA — `new_rcd`
+# 5G Network RCA — `SCRCA`
 
 Root Cause Analysis (RCA) for 5G network faults using the **SCRCA algorithm** with a learned initial graph.
 
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 ## Repository structure
 
 ```
-new_rcd/
+SCRCA/
 ├── rcd.py                     # Main RCA entry point (load_offline_scenario, top_k_rc)
 ├── utils.py                   # PC algorithm, graph building, data preprocessing
 ├── learned_initial_graph.json # Pre-saved initial graph (94 metric-metric edges)
@@ -151,33 +151,9 @@ usage: evaluate.py [-h] [--dataset DATASET] [--mode {learned_initial_graph,compl
 
 ---
 
-## Using the API directly
-
-```python
-import sys
-sys.path.insert(0, '/path/to/new_rcd')
-import rcd
-
-# Load a scenario
-normal_df, anomalous_df, ground_truth, shift_scores = rcd.load_offline_scenario(
-    '/path/to/scenario_dir',
-    normal_before_s=60,
-    anomalous_after_s=60,
-    metric_allowlist=rcd.DEFAULT_RCA_METRICS,
-)
-
-# Run RCA (uses learned_initial_graph by default)
-result = rcd.top_k_rc(normal_df, anomalous_df, k=3, bins=2)
-print(result['root_cause'])   # e.g. ['upf2::cpu_usage_rate', 'upf2::cpu_throttle_rate', ...]
-
-# Run with complete graph instead
-result = rcd.top_k_rc(normal_df, anomalous_df, k=3, bins=2,
-                       initial_graph_mode='complete')
-```
 
 
-
-## mONITORED metrics (20 total, all related to one network slice (slice 2))
+## Monitored metrics (20 total, all related to one network slice (slice 2))
 
 | Metric | Description |
 |---|---|
