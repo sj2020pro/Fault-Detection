@@ -1,4 +1,4 @@
-# 5G Network RCA — `new_rcd`
+# 5G Network RCA — `SCRCA`
 
 Root Cause Analysis (RCA) for 5G network faults using the **SCRCA algorithm**
 
@@ -9,7 +9,7 @@ Root Cause Analysis (RCA) for 5G network faults using the **SCRCA algorithm**
 The algorithm identifies the most likely root-cause metrics for a fault by:
 
 1. Splitting a metrics time-series window into a **normal baseline** (60 s before fault) and an **anomalous window** (60 s after fault start).
-2. Running a **PC skeleton-discovery** algorithm seeded with a pre-computed initial graph (`learned_initial_graph.json`) rather than starting from a complete graph. This biases the search toward known causal relationships in the 5G user plane
+2. Running a **PC skeleton-discovery** algorithm seeded with a pre-computed initial graph (`learned_initial_graph.json`) rather than starting from a complete graph. This biases the search toward known causal relationships in the 5G user plane.
 3. Ranking F-node neighbours by p-value and effect size to produce a top-k root cause list.
 
 ### Supported fault types
@@ -28,7 +28,7 @@ The algorithm works on any fault type whose scenarios include `root_cause_metric
 
 ## Setup
 
-Requires **Python 3.8** and the **cmu-phil fork** of `causal-learn==0.1.2.3`. On Python 3.8, `pip install causal-learn==0.1.2.3` installs the correct cmu-phil build. On Python 3.9+ the same version resolves to the py-why fork which has breaking API changes (`CausalGraph.remove_edge`, `p_values`, `mi`, `no_ci_tests` and `append_to_mi` are absent) and will not work.
+Requires **Python 3.8** and `causal-learn==0.1.2.3` from the **cmu-phil fork**, patched with the modified files included in this repository. The patching is necessary because the code relies on internal APIs added by the original RCD paper authors (`local_skeleton_discovery`, `CausalGraph.remove_edge`, `p_values`, `mi`, `no_ci_tests`, `append_to_mi`).
 
 ```bash
 # 1. Create and activate a Python 3.8 virtual environment
@@ -38,18 +38,29 @@ source env/bin/activate
 # 2. Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# 3. Patch causal-learn with the modified files from this repo
+#    (replace /path/to/SCRCA with the actual path to this folder)
+REPO=/path/to/SCRCA
+CAUSAL=$HOME/env/lib/python3.8/site-packages/causallearn
+
+ln -fs $REPO/causallearn/graph/GraphClass.py                          $CAUSAL/graph/GraphClass.py
+ln -fs $REPO/causallearn/utils/PCUtils/SkeletonDiscovery.py           $CAUSAL/utils/PCUtils/SkeletonDiscovery.py
+ln -fs $REPO/causallearn/utils/Fas.py                                  $CAUSAL/utils/Fas.py
+ln -fs $REPO/causallearn/search/ConstraintBased/FCI.py                $CAUSAL/search/ConstraintBased/FCI.py
 ```
 
-> **Note:** `causal-learn==0.1.2.3` is pinned and **must be installed under Python 3.8**
-> to get the cmu-phil fork with the required internal API.
-> `pyarrow` is required for reading `.parquet` metric files.
+> **Why the patch?** The installed `causal-learn==0.1.2.3` package is missing several internal APIs
+> that the RCD algorithm uses. The `causallearn/` folder in this repo contains drop-in replacements
+> for four files that add those APIs. The symlinks make the installed package use those files instead.
+> Without this step you will see errors like `AttributeError: 'CausalGraph' has no attribute 'remove_edge'`.
 
 ---
 
 ## Repository structure
 
 ```
-new_rcd/
+SCRCA/
 ├── rcd.py                     # Main RCA entry point (load_offline_scenario, top_k_rc)
 ├── utils.py                   # PC algorithm, graph building, data preprocessing
 ├── learned_initial_graph.json # Pre-saved initial graph (94 metric-metric edges)
@@ -96,18 +107,6 @@ The `root_cause_metrics` field is required for accuracy evaluation. Scenario dir
 
 ```bash
 python evaluate.py
-```
-
-### Compare learned initial graph vs. complete graph (side-by-side with delta)
-
-```bash
-python evaluate.py --compare
-```
-
-### Use the complete graph only (PC baseline)
-
-```bash
-python evaluate.py --mode complete
 ```
 
 ### Point to a different dataset folder
