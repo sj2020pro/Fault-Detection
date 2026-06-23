@@ -61,7 +61,7 @@ Episode directory names encode:
 The ground truth (fault type + target NF + correct root-cause metrics) is
 only used during evaluation (see Evaluation section below).
 
-### Class distribution after quality filtering
+### Class distribution
 
 | Fault type | Episodes |
 |---|---|
@@ -139,13 +139,7 @@ Top-level keys:
 ## Baseline Algorithm
 
 The `effect_gradient_rca` algorithm (`rcd_v2/rcd.py`) operates without any
-prior knowledge of fault types.  It:
-
-1. Computes an effect score per metric: `max(z-score, log2 fold-change)`
-2. Orients edges between changed metrics using a fixed normal-operation causal
-   graph (`normal_initial_graph.json`) and direction/magnitude heuristics
-3. Identifies source nodes (no upstream anomalous predecessor) as root causes
-4. Returns a ranked list (top-1 / top-3)
+prior knowledge of fault types.
 
 **Baseline accuracy on this 115-episode dataset:**
 
