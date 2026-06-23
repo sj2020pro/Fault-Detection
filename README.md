@@ -27,7 +27,7 @@ Read **`network_context.txt`** first.  It gives a complete description of:
 ## Dataset Structure
 
 ```
-140_roundrobin_extracted/
+Multi_Modal_Dataset/
 ├── README.md                   ← this file
 ├── network_context.txt         ← LLM system-context description of the network
 └── ep<NNN>_r<RR>f<FF>_<fault_type>__<target>/
@@ -39,7 +39,7 @@ Read **`network_context.txt`** first.  It gives a complete description of:
 ```
 
 Episode directory names encode:
-- `ep<NNN>` — global episode number (001–140, gaps where bad episodes were removed)
+- `<NNN>` — global episode number
 - `r<RR>`   — round number (01–20)
 - `f<FF>`   — fault index within the round (1–7)
 - `<fault_type>` — one of the seven fault types listed below
